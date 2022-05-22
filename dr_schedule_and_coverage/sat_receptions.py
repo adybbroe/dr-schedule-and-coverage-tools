@@ -50,6 +50,8 @@ class ReceptionsConflictResolution():
         self._raw_sorted = sorted_passlist
 
         self.passlist = self._get_annotated_pass_list()
+        self.receptions = []
+        self.rejections = []
 
     def _get_annotated_pass_list(self):
         """Get annotated pass list from sorted passlist."""
@@ -63,12 +65,64 @@ class ReceptionsConflictResolution():
 
     def check_for_conflicts(self):
         """Check the passlist for possible conflicts and for each pass add the list of conflicting passes."""
+        pass_ids = list(self.passlist.keys())
+        number_of_passes = len(pass_ids)
 
-        pass
+        for idx, pass_id in enumerate(pass_ids):
+            is_overlap = True
+            overlapping_passes = []
+            next_id = idx + 1
+            while is_overlap and next_id < number_of_passes:
+                next_pass_id = pass_ids[next_id]
+                is_overlap = passes_overlap(self.passlist[pass_id],
+                                            self.passlist[next_pass_id])
+                if is_overlap:
+                    overlapping_passes.append(next_pass_id)
+                next_id = next_id + 1
+
+            is_overlap = True
+            next_id = max(0, idx - 1)
+            while is_overlap and next_id >= 0:
+                next_pass_id = pass_ids[next_id]
+                is_overlap = passes_overlap(self.passlist[pass_id],
+                                            self.passlist[next_pass_id])
+                if is_overlap:
+                    overlapping_passes.append(next_pass_id)
+                next_id = next_id - 1
+
+            self.passlist[pass_id]['conflicts'] = overlapping_passes
+
+    def resolve_conflicts(self):
+        """Resolve the conflicts, and store passes for reception in a seperate list."""
+        pass_ids = list(self.passlist.keys())
+        number_of_passes = len(pass_ids)
+
+        for idx, pass_id in enumerate(pass_ids):
+            # Check on all conflicts:
+            if len(self.passlist[pass_id]['conflicts']) == 0:
+                self.receptions.append(pass_id)
+                continue
+
+            platform_name = self.passlist[pass_id]['platform_name']
+            rejected = False
+            for confl_pass in self.passlist[pass_id]['conflicts']:
+                confl_platform_name = self.passlist[confl_pass]['platform_name']
+                if (SAT_RECEPTION_PRIOLIST.get(platform_name, 999) >
+                        SAT_RECEPTION_PRIOLIST.get(confl_platform_name, 999)):
+                    rejected = True
+                    break
+
+            if rejected:
+                self.rejections.append(pass_id)
+            else:
+                self.receptions.append(pass_id)
 
 
-def passes_overlap(pass1, pass2):
-    """Check if two passes overlap/conflicts."""
+def passes_overlap_dict(pass1, pass2):
+    """Check if two passes overlap/conflicts.
+
+    pass1 and pass2 are dicts.
+    """
     if pass1['end'] < pass2['end'] and pass1['end'] > pass2['start']:
         return True
     if pass2['end'] < pass1['end'] and pass2['end'] > pass1['start']:
@@ -79,6 +133,80 @@ def passes_overlap(pass1, pass2):
         return True
 
     return False
+
+
+def passes_overlap_list(pass1, pass2):
+    """Check if two passes overlap/conflicts.
+
+    pass1 and pass2 are lists, with start and end times and platform name in
+    that order.
+    """
+    if pass1[1] < pass2[1] and pass1[1] > pass2[0]:
+        return True
+    if pass2[1] < pass1[1] and pass2[1] > pass1[0]:
+        return True
+    if pass1[0] > pass2[0] and pass1[0] < pass2[1]:
+        return True
+    if pass2[0] > pass1[0] and pass2[0] < pass1[1]:
+        return True
+
+    return False
+
+
+def passes_overlap(pass1, pass2):
+    """Check if two passes overlap/conflicts."""
+    if isinstance(pass1, dict):
+        return passes_overlap_dict(pass1, pass2)
+    elif isinstance(pass1, list):
+        return passes_overlap_list(pass1, pass2)
+
+
+def merge_two_passes(pass1, pass2):
+    """Merge two overlapping passes of the same satellite."""
+    starttime = min(pass1[0], pass2[0])
+    endtime = max(pass1[1], pass2[1])
+    return [starttime, endtime, pass1[2]]
+
+
+def merge_passes_one_satellite(allpasses):
+    """Take a passlist of one satellite only and merge overlapping passes."""
+    newlist = []
+    num_of_passes = len(allpasses)
+    idx = 0
+    apass = allpasses[0]
+    while idx < num_of_passes:
+        if idx == num_of_passes - 1:
+            newlist.append(apass)
+            break
+
+        nextpass = allpasses[idx+1]
+        overlaps = passes_overlap(apass, nextpass)
+        if overlaps:
+            newpass = merge_two_passes(apass, nextpass)
+            newlist.append(newpass)
+            idx = idx+2
+        else:
+            newlist.append(apass)
+            idx = idx+1
+
+        if idx < num_of_passes:
+            apass = allpasses[idx]
+
+    if len(newlist) == len(allpasses):
+        return newlist
+    else:
+        return merge_passes_one_satellite(newlist)
+
+
+def calculate_total_minutes_received(passlist):
+    """Take a list of passes for one satellite and calculate the total minutes received."""
+    passlist = merge_passes_one_satellite(passlist)
+    total_minutes = 0
+    for apass in passlist:
+        minutes_one_pass = (apass[1] - apass[0]).total_seconds()/60.
+        total_minutes = total_minutes + minutes_one_pass
+
+    return total_minutes
 
 
 class CreateReceptionList():
@@ -131,3 +259,5 @@ class CreateReceptionList():
         with open(output_filename, 'w') as fpt:
             wrt = csv.writer(fpt, delimiter=',')
             wrt.writerows([x.split(',') for x in rows])
+
+# ----------------
